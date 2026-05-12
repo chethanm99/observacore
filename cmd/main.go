@@ -2,11 +2,9 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"observacore/internal/components/batcher"
-	"observacore/internal/components/exporter"
-	"observacore/internal/components/processor"
-	"observacore/internal/components/receiver"
+	processor "observacore/internal/components/processor_interface"
+	"observacore/internal/config"
+	"observacore/internal/factory"
 	"observacore/internal/model"
 	"observacore/internal/pipeline"
 	"time"
@@ -15,7 +13,7 @@ import (
 )
 
 func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
 	logger, _ := zap.NewProduction()
@@ -23,33 +21,45 @@ func main() {
 
 	metrics := &model.MetricCount{}
 	retryCh := make(chan model.RetryItem, 500)
+	cfg, err := config.LoadYAMLConfigFile("config.yaml")
+	if err != nil {
+		logger.Fatal("failed to load config", zap.Error(err))
+	}
 
-	r := receiver.NewInMemoryReceiver(500 * time.Millisecond)
-	p := processor.NewCPUFilterProcessor("CPU", 50)
-	b := batcher.NewBatchBySize(4)
+	r, err := factory.BuildReceiver(cfg.Pipeline.Receiver)
+	if err != nil {
+		logger.Fatal("failed to build receiver", zap.Error(err))
+	}
 
-	e := exporter.NewConsoleExporter()
-	e.RetryCh = retryCh
+	var processors []processor.Processor
+	for _, procCfg := range cfg.Pipeline.Processors {
+		p, err := factory.BuildProcessor(procCfg)
+		if err != nil {
+			logger.Fatal("failed to build processor", zap.Error(err))
+		}
+		processors = append(processors, p)
+	}
+
+	b, err := factory.BuildBatcher(cfg.Pipeline.Batcher)
+	if err != nil {
+		logger.Fatal("failed to build batcher", zap.Error(err))
+	}
+
+	e, err := factory.BuildExporter(cfg.Pipeline.Exporter, retryCh)
+	if err != nil {
+		logger.Fatal("failed to build exporter")
+	}
 
 	pl := &pipeline.Pipeline{
 		Receiver:     r,
-		Processors:   []processor.Processor{p},
+		Processors:   processors,
 		Batcher:      b,
 		Exporter:     e,
 		Logger:       logger,
 		Metrics:      metrics,
-		NumOfWorkers: 5,
-		Buffersize:   100,
+		NumOfWorkers: cfg.Runtime.NumOfWorkers,
+		Buffersize:   cfg.Runtime.Buffersize,
 	}
 
-	if pl.Receiver == nil || pl.Logger == nil || pl.Metrics == nil {
-		fmt.Println("Receiver:", pl.Receiver)
-		fmt.Println("Logger:", pl.Logger)
-		fmt.Println("Metrics:", pl.Metrics)
-
-		panic("dependency wiring failed")
-	}
-
-	exporter.StartRetryWorkers(ctx, retryCh, 5, 3, 100*time.Millisecond, logger, metrics)
 	pl.Start(ctx)
 }

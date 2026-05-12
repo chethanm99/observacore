@@ -2,10 +2,10 @@ package pipeline
 
 import (
 	"context"
-	"observacore/internal/components/batcher"
-	"observacore/internal/components/exporter"
-	"observacore/internal/components/processor"
-	"observacore/internal/components/receiver"
+	batcher "observacore/internal/components/batcher_interface"
+	exporter "observacore/internal/components/exporter_interface"
+	processor "observacore/internal/components/processor_interface"
+	receiver "observacore/internal/components/receiver_interface"
 	"observacore/internal/model"
 	"sync"
 	"sync/atomic"
@@ -32,6 +32,7 @@ func (p *Pipeline) Start(ctx context.Context) {
 	batchedCh := make(chan []model.Metric, p.Buffersize)
 
 	go StartMetricsReporter(ctx, p.Metrics, p.Logger, func() int { return len(p.RetryCh) }, func() int { return len(rawCh) }, func() int { return len(processedCh) })
+	go p.Exporter.StartRetryWorkers(ctx, p.Metrics, p.Logger)
 
 	go func() {
 		p.Receiver.Start(ctx, rawCh, p.Metrics, p.Logger)
@@ -95,8 +96,7 @@ func (p *Pipeline) Start(ctx context.Context) {
 	}()
 
 	go func() {
-		b := p.Batcher
-		ticker := time.NewTicker(1 * time.Second)
+		ticker := time.NewTicker(p.Batcher.GetInterval())
 		defer ticker.Stop()
 		defer close(batchedCh)
 
@@ -104,7 +104,7 @@ func (p *Pipeline) Start(ctx context.Context) {
 			select {
 			case metric, ok := <-processedCh:
 				if !ok {
-					if batch, ok := b.Flush(); ok {
+					if batch, ok := p.Batcher.Flush(); ok {
 						select {
 						case batchedCh <- batch:
 						case <-ctx.Done():
@@ -113,7 +113,7 @@ func (p *Pipeline) Start(ctx context.Context) {
 					return
 				}
 
-				if batch, ok := b.Add(metric); ok {
+				if batch, ok := p.Batcher.Add(metric); ok {
 					select {
 					case batchedCh <- batch:
 					case <-ctx.Done():
@@ -122,7 +122,7 @@ func (p *Pipeline) Start(ctx context.Context) {
 				}
 
 			case <-ticker.C:
-				if batch, ok := b.Flush(); ok {
+				if batch, ok := p.Batcher.Flush(); ok {
 					select {
 					case batchedCh <- batch:
 					case <-ctx.Done():
@@ -131,7 +131,7 @@ func (p *Pipeline) Start(ctx context.Context) {
 				}
 
 			case <-ctx.Done():
-				if batch, ok := b.Flush(); ok {
+				if batch, ok := p.Batcher.Flush(); ok {
 					batchedCh <- batch
 				}
 				return
@@ -173,7 +173,7 @@ func (p *Pipeline) logSummary() {
 }
 
 func StartMetricsReporter(ctx context.Context, metrics *model.MetricCount, logger *zap.Logger, getRetryQueueLen func() int, getRawQueueLen func() int, getProcessedQueueLen func() int) {
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(900 * time.Nanosecond)
 	defer ticker.Stop()
 
 	var prevProcessed int64

@@ -10,17 +10,17 @@ import (
 	"go.uber.org/zap"
 )
 
-func StartRetryWorkers(ctx context.Context, retryCh chan model.RetryItem, numWorkers int, maxRetries int, baseBackOff time.Duration, logger *zap.Logger, metrics *model.MetricCount) {
-	for i := 0; i < numWorkers; i++ {
+func (c *ConsoleExporter) StartRetryWorkers(ctx context.Context, metrics *model.MetricCount, logger *zap.Logger) {
+	for i := 0; i < c.RetryWorkers; i++ {
 		go func(id int) {
 			for {
 				select {
 				case <-ctx.Done():
-				case item, ok := <-retryCh:
+				case item, ok := <-c.RetryCh:
 					if !ok {
 						return
 					}
-					processRetry(ctx, item, retryCh, maxRetries, baseBackOff, logger, metrics)
+					processRetry(ctx, item, c.RetryCh, c.MaxRetries, c.BaseBackOff, logger, metrics)
 				}
 			}
 		}(i)

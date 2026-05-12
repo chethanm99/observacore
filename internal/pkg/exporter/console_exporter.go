@@ -10,20 +10,19 @@ import (
 	"go.uber.org/zap"
 )
 
-type Exporter interface {
-	Export(ctx context.Context, in <-chan []model.Metric, metrics *model.MetricCount, logger *zap.Logger)
-}
-
 type ConsoleExporter struct {
-	MaxRetries  int
-	BaseBackOff time.Duration
-	RetryCh     chan model.RetryItem
+	MaxRetries   int
+	BaseBackOff  time.Duration
+	RetryCh      chan model.RetryItem
+	RetryWorkers int
 }
 
-func NewConsoleExporter() *ConsoleExporter {
+func NewConsoleExporter(maxRetries int, baseBackOff time.Duration, retryCh chan model.RetryItem, retryWorkers int) *ConsoleExporter {
 	return &ConsoleExporter{
-		MaxRetries:  3,
-		BaseBackOff: 100 * time.Millisecond,
+		MaxRetries:   maxRetries,
+		BaseBackOff:  baseBackOff,
+		RetryCh:      retryCh,
+		RetryWorkers: retryWorkers,
 	}
 }
 
@@ -65,7 +64,7 @@ func (c *ConsoleExporter) Export(ctx context.Context, in <-chan []model.Metric, 
 			atomic.AddInt64(&metrics.ExportedCount, int64(len(batch)))
 			logger.Info("export_success", zap.String("component", "exporter"), zap.Int("batch_size", len(batch)), zap.Int64("exported_total", metrics.ExportedCount))
 			for _, m := range batch {
-				latency := time.Since(time.Now())
+				latency := time.Since(m.Timestamp)
 				atomic.AddInt64(&metrics.EndToEndLatencyNs, latency.Nanoseconds())
 				fmt.Printf("ID:%d Name:%s Value:%.2f Timestamp:%s\n", m.ID, m.Name, m.Value, m.Timestamp.Format(time.RFC3339Nano))
 			}

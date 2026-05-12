@@ -1,0 +1,33 @@
+run_time:
+  num_of_workers: 6
+  buffer_size: 10
+
+pipeline:
+  receiver:
+    type: in-memory
+    config:
+      interval_ms: 1
+      burst_size: 100
+      metric_names:
+        - CPU
+        - Disk
+        - Memory
+
+  processors:
+    - type: cpu_filter
+      config:
+        metric_name: CPU
+        threshold: 50.0
+
+  batcher:
+    type: simple
+    config:
+      batch_size: 4
+      flush_interval_ms: 1000
+
+  exporter:
+    type: console
+    config:
+      max_retries: 3
+      base_backoff_ms: 200
+      retry_workers: 3
